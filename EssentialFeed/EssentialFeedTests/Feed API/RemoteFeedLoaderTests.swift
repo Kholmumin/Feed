@@ -121,7 +121,7 @@ extension RemoteFeedLoaderTests{
             messages.map{$0.url}
         }
         
-        func getFromURL(url: URL, completion: @escaping (HTTPClientResult) -> Void) {
+        func get(from url: URL, completion: @escaping (HTTPClientResult) -> Void) {
             messages.append((url, completion))
         }
         
@@ -153,17 +153,7 @@ extension RemoteFeedLoaderTests{
         
         return (sut, client)
     }
-    
-    private func trackForMemoryLeaks(
-        _ instance: AnyObject,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ){
-        addTeardownBlock { [weak instance] in
-            XCTAssertNil(instance, "Instance should have been deallocated! Potential Memory Leak", file: file, line: line)
-        }
-    }
-    
+        
     private func makeItem(
         id: UUID,
         description: String? = nil,
