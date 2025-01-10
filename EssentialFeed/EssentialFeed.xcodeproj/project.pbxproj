@@ -55,8 +55,8 @@
 			membershipExceptions = (
 				FeedItemMapper.swift,
 				HTTPClient.swift,
+				Mytest.swift,
 				RemoteFeedLoader.swift,
-				Testcase.swift,
 				URLSessionHTTPClient.swift,
 			);
 			target = 080EDEF021B6DA7E00813479 /* EssentialFeed */;
