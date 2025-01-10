@@ -8,4 +8,5 @@
 import Foundation
 struct just{
     let data: String
+    let value: Int
 }
