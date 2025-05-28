@@ -10,7 +10,36 @@ import XCTest
 import EssentialFeed
 import EssentialFeediOS
 
-final class FeedViewControllerTests: XCTestCase{
+final class FeedUIIntegrationTests: XCTestCase{
+    
+    func test_localizedStrings_haveKeysAndValuesForAllSupportedLocalizations() {
+        let table = "Feed"
+        let presentationBundle = Bundle(for: FeedPresenter.self)
+        let localizationBundles = allLocalizationBundles(in: presentationBundle)
+        let localizedStringKeys = allLocalizedStringKeys(in: localizationBundles, table: table)
+        
+        localizationBundles.forEach { (bundle, localization) in
+            localizedStringKeys.forEach { key in
+                let localizedString = bundle.localizedString(forKey: key, value: nil, table: table)
+                
+                if localizedString == key {
+                    let language = Locale.current.localizedString(forLanguageCode: localization) ?? ""
+                    
+                    XCTFail("Missing \(language) (\(localization)) localized string for key: '\(key)' in table: '\(table)'")
+                }
+            }
+        }
+    }
+    
+    
+    func test_feedView_title(){
+        let (sut, _) = makeSUT()
+        sut.simulateAppearance()
+        
+        let localizedKey = "FEED_VIEW_TITLE"
+        
+        XCTAssertEqual(sut.title, localized(localizedKey))
+    }
     
     func test_loadFeedActions_requestFeedFromLoader() {
         let (sut, loader) = makeSUT()
@@ -228,16 +257,58 @@ final class FeedViewControllerTests: XCTestCase{
         let image0 = makeImage(url: URL(string: "http://url-0.com")!)
         let image1 = makeImage(url: URL(string: "http://url-1.com")!)
         let (sut, loader) = makeSUT()
-
+        
         sut.simulateAppearance()
         loader.completeFeedLoading(with: [image0, image1])
         XCTAssertEqual(loader.cancelledImageURLs, [], "Expected no cancelled image URL requests until image is not near visible")
-
+        
         sut.simulateFeedImageViewNotNearVisible(at: 0)
         XCTAssertEqual(loader.cancelledImageURLs, [image0.url], "Expected first cancelled image URL request once first image is not near visible anymore")
-
+        
         sut.simulateFeedImageViewNotNearVisible(at: 1)
         XCTAssertEqual(loader.cancelledImageURLs, [image0.url, image1.url], "Expected second cancelled image URL request once second image is not near visible anymore")
+    }
+    
+    func test_feedImageView_doesNotRenderLoadedImageWhenNotVisibleAnymore(){
+        let (sut, loader) = makeSUT()
+        
+        sut.simulateAppearance()
+        loader.completeFeedLoading(with: [makeImage()])
+        
+        let view = sut.simulateFeedImageViewNotVisible(at: 0)
+        loader.completeImageLoading(with: anyImageData())
+        
+        XCTAssertNil(view?.renderedImage, "Expected no rendered image when an image load finishes after the view is not visible anymore")
+    }
+    
+    func test_loadFeedCompletion_dispatchesFromBackgroundToMainThread(){
+        let (sut, loader) = makeSUT()
+        
+        sut.simulateAppearance()
+        
+        let exp = expectation(description: "Wait for background queue")
+        DispatchQueue.global().async{
+            loader.completeFeedLoading(at: 0)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 1.0)
+    }
+    
+    func test_loadImageDataCompletion_dispatchesFromBackgroundToMainThread(){
+        let (sut, loader) = makeSUT()
+        
+        sut.simulateAppearance()
+        loader.completeFeedLoading(with: [makeImage()])
+        
+        _ = sut.simulateFeedImageViewVisible(at: 0)
+        
+        let exp = expectation(description: "Wait for background queue")
+        DispatchQueue.global().async{
+            loader.completeImageLoading(with: self.anyImageData(), at: 0)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 1.0)
+        
     }
     
     
@@ -247,7 +318,7 @@ final class FeedViewControllerTests: XCTestCase{
         line: UInt = #line
     )-> (sut: FeedViewController, loader: LoaderSpy){
         let loader = LoaderSpy()
-        let sut = FeedViewController(feedLoader: loader, imageLoader: loader)
+        let sut = FeedUIComposer.feedComposedWith(feedLoader: loader, imageLoader: loader)
         trackForMemoryLeaks(loader, file: file, line: line)
         trackForMemoryLeaks(sut, file: file, line: line)
         return (sut, loader)
@@ -295,6 +366,44 @@ final class FeedViewControllerTests: XCTestCase{
     ) -> FeedImage{
         return FeedImage(id: UUID(), description: description, location: location, imageURL: url)
     }
+    
+    private func anyImageData() -> Data{
+        return UIImage.make(withColor: .red).pngData()!
+    }
+    
+    // MARK: - Helpers Localization
+    
+    private typealias LocalizedBundle = (bundle: Bundle, localization: String)
+    
+    private func allLocalizationBundles(in bundle: Bundle, file: StaticString = #file, line: UInt = #line) -> [LocalizedBundle] {
+        return bundle.localizations.compactMap { localization in
+            guard
+                let path = bundle.path(forResource: localization, ofType: "lproj"),
+                let localizedBundle = Bundle(path: path)
+            else {
+                XCTFail("Couldn't find bundle for localization: \(localization)", file: file, line: line)
+                return nil
+            }
+            
+            return (localizedBundle, localization)
+        }
+    }
+    
+    private func allLocalizedStringKeys(in bundles: [LocalizedBundle], table: String, file: StaticString = #file, line: UInt = #line) -> Set<String> {
+        return bundles.reduce([]) { (acc, current) in
+            guard
+                let path = current.bundle.path(forResource: table, ofType: "strings"),
+                let strings = NSDictionary(contentsOfFile: path),
+                let keys = strings.allKeys as? [String]
+            else {
+                XCTFail("Couldn't load localized strings for localization: \(current.localization)", file: file, line: line)
+                return acc
+            }
+            
+            return acc.union(Set(keys))
+        }
+    }
+    
     
     class LoaderSpy: FeedLoader, FeedImageDataLoader{
         // MARK: - FeedLoader
@@ -354,8 +463,8 @@ private extension FeedViewController{
     func simulateAppearance(){
         if !isViewLoaded{
             loadViewIfNeeded()
+            replaceRefreshControlWithFakeForiOS17Support()
         }
-        replaceRefreshControlWithFakeForiOS17Support()
         beginAppearanceTransition(true, animated: false)
         endAppearanceTransition()
     }
@@ -369,12 +478,15 @@ private extension FeedViewController{
         return feedImageView(at: index) as? FeedImageCell
     }
     
-    func simulateFeedImageViewNotVisible(at row: Int){
+    @discardableResult
+    func simulateFeedImageViewNotVisible(at row: Int) -> FeedImageCell?{
         let view = simulateFeedImageViewVisible(at: row)
         
         let delegate = tableView.delegate
         let index = IndexPath(row: row, section: feedImagesSection)
         delegate?.tableView?(tableView, didEndDisplaying: view!, forRowAt: index)
+        
+        return view
     }
     
     func replaceRefreshControlWithFakeForiOS17Support() {
@@ -492,5 +604,21 @@ private extension UIImage {
             color.setFill()
             rendererContext.fill(rect)
         }
+    }
+}
+
+private extension FeedUIIntegrationTests{
+    private func localized(
+        _ key: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> String{
+        let table = "Feed"
+        let bundle = Bundle(for: FeedViewController.self)
+        let value = bundle.localizedString(forKey: "\(key)", value: nil, table: table)
+        if value == key {
+            XCTFail("Missing localized string for a key: \(key) in table: \(table)", file: file, line: line)
+        }
+        return value
     }
 }
